@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Геолокация</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  body { margin: 0; background: #1c1c1e; color: #fff;
+         font-family: -apple-system, sans-serif; }
+  #ui { padding: 30px 20px; }
+  button { padding: 14px 24px; font-size: 17px; border-radius: 12px;
+           border: none; background: #0a84ff; color: #fff; margin-top: 16px; }
+  #link { margin-top: 20px; word-break: break-all; font-size: 15px; }
+  #link a { color: #5ac8fa; }
+  #info { margin-top: 16px; font-size: 16px; line-height: 1.6; }
+  #map { width: 100%; height: 60vh; border: 0; margin-top: 16px;
+         border-radius: 12px; display: none; }
+  #map.on { display: block; }
+  a { color: #5ac8fa; }
+</style>
+</head>
+<body>
+  <div id="ui">
+    <div id="status">Нажми кнопку, чтобы определить местоположение.</div>
+    <button id="btn">Определить местоположение и начать передачу</button>
+    <div id="link"></div>
+    <div id="info"></div>
+    <iframe id="map" title="Карта"></iframe>
+  </div>
+
+<script>
+const statusEl = document.getElementById("status");
+const infoEl   = document.getElementById("info");
+const linkEl   = document.getElementById("link");
+const mapEl    = document.getElementById("map");
+
+const params  = new URLSearchParams(location.search);
+const watchId = params.get("watch");
+const conns   = [];
+let lastPos   = null;
+
+const fmt = p => ({
+  lat: p.coords.latitude,
+  lon: p.coords.longitude,
+  acc: Math.round(p.coords.accuracy),
+  t:   new Date(p.timestamp).toLocaleTimeString()
+});
+
+if (watchId) {
+  // Режим просмотра
+  document.getElementById("btn").style.display = "none";
+  statusEl.textContent = "Подключаюсь…";
+  const peer = new Peer();
+  peer.on("open", () => {
+    const conn = peer.connect(watchId, { reliable: true });
+    conn.on("open",  () => { statusEl.textContent = "Соединение есть, жду координаты…"; });
+    conn.on("data",  p  => show(p));
+    conn.on("close", () => statusEl.textContent = "Соединение закрыто.");
+  });
+  peer.on("error", e => { statusEl.textContent = "Ошибка: " + e.type; });
+} else {
+  document.getElementById("btn").onclick = start;
+}
+
+function show(p) {
+  statusEl.textContent = "";
+  mapEl.classList.add("on");
+  infoEl.innerHTML =
+    'Широта: <b>' + p.lat.toFixed(6) + '</b><br>' +
+    'Долгота: <b>' + p.lon.toFixed(6) + '</b><br>' +
+    'Точность: ±' + p.acc + ' м<br>' +
+    'Обновлено: ' + p.t + '<br><br>' +
+    '<a href="https://yandex.ru/maps/?pt=' + p.lon + ',' + p.lat + '&z=17">Открыть в Яндекс.Картах</a><br>' +
+    '<a href="https://maps.google.com/?q=' + p.lat + ',' + p.lon + '">Открыть в Google Картах</a>';
+  const d = 0.003;
+  mapEl.src = "https://www.openstreetmap.org/export/embed.html?bbox=" +
+    (p.lon - d) + "," + (p.lat - d) + "," + (p.lon + d) + "," + (p.lat + d) +
+    "&layer=mapnik&marker=" + p.lat + "," + p.lon;
+}
+
+function broadcast() {
+  conns.forEach(c => { if (c.open) { try { c.send(lastPos); } catch (e) {} } });
+}
+
+function start() {
+  if (!navigator.geolocation) {
+    alert("Геолокация не поддерживается этим браузером");
+    return;
+  }
+  navigator.geolocation.watchPosition(pos => {
+    lastPos = fmt(pos);
+    broadcast();
+  }, err => {
+    alert("Местоположение недоступно: " + err.message);
+  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+
+  const peer = new Peer();
+  peer.on("open", id => {
+    const url = location.origin + location.pathname + "?watch=" + id;
+    linkEl.innerHTML = "Отправь эту ссылку тому, кто будет смотреть:<br><br>" +
+      '<a href="' + url + '">' + url + '</a>';
+  });
+  peer.on("connection", conn => {
+    conns.push(conn);
+    conn.on("open", () => { if (lastPos) conn.send(lastPos); });
+  });
+  peer.on("error", e => alert("Ошибка: " + e.type));
+}
+</script>
+</body>
+</html>
